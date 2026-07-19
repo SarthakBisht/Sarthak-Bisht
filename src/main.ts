@@ -9,7 +9,7 @@ import {
   type MaterialPreset,
 } from './config';
 import { createRecorder, type RecorderHandle } from './capture/recorder';
-import { RingGuide } from './capture/ringGuide';
+import { ScanGuide } from './capture/scanGuide';
 import { runTier0, type Tier0Result } from './pipeline/pipeline';
 import { trainSplatScene } from './splat/trainer';
 import { tryPosefree } from './posefree/dust3r';
@@ -51,7 +51,7 @@ interface AppState {
   splat: SplatScene | null;
   viewer: OrbitViewer | null;
   recorder: RecorderHandle | null;
-  ring: RingGuide | null;
+  guide: ScanGuide | null;
 }
 const state: AppState = {
   gpuOk: false,
@@ -60,7 +60,7 @@ const state: AppState = {
   splat: null,
   viewer: null,
   recorder: null,
-  ring: null,
+  guide: null,
 };
 
 const root = document.getElementById('app')!;
@@ -82,9 +82,9 @@ function clearContent() {
     state.recorder.dispose();
     state.recorder = null;
   }
-  if (state.ring) {
-    state.ring.dispose();
-    state.ring = null;
+  if (state.guide) {
+    state.guide.dispose();
+    state.guide = null;
   }
   root.innerHTML = '';
 }
@@ -172,13 +172,21 @@ async function showCapture() {
   const wrap = el('div', { class: 'capture-wrap' });
   screen.append(wrap);
 
+  // Big live coaching banner above the controls.
+  const coachBanner = el('div', { class: 'coach' }, 'Point at the object…');
+  screen.append(coachBanner);
+
   const controls = el('div', { class: 'row' });
   const backBtn = el('button', {}, '‹ Back');
   backBtn.addEventListener('click', () => showHome());
   const recBtn = el('button', { class: 'primary grow' }, '● Start');
   controls.append(backBtn, recBtn);
   screen.append(controls);
-  const hint = el('div', { class: 'muted' }, 'Fill the ring evenly. Recording auto-stops at the max duration.');
+  const hint = el(
+    'div',
+    { class: 'muted' },
+    'Center the object in the circle. Turn the turntable slowly and evenly through a full 360°; recording auto-stops at the max duration.',
+  );
   screen.append(hint);
   root.append(screen);
 
@@ -186,19 +194,24 @@ async function showCapture() {
   try {
     recorder = await createRecorder(wrap);
   } catch (err) {
-    hint.textContent = `Camera unavailable: ${(err as Error).message}. Try uploading a video instead.`;
+    coachBanner.textContent = `Camera unavailable: ${(err as Error).message}`;
+    hint.textContent = 'Try "Upload video" from the home screen instead.';
     return;
   }
   state.recorder = recorder;
-  const ring = new RingGuide(wrap, getConfig().capture.targetSeconds);
-  state.ring = ring;
-  ring.showIdle();
+
+  const guide = new ScanGuide(wrap, recorder.video, getConfig().capture.targetSeconds, (s) => {
+    coachBanner.textContent = s.primary;
+    coachBanner.classList.toggle('good', s.ok);
+    coachBanner.classList.toggle('warn', !s.ok);
+  });
+  state.guide = guide;
 
   let recording = false;
   recBtn.addEventListener('click', async () => {
     if (!recording) {
       recorder.start();
-      ring.start();
+      guide.start();
       recording = true;
       recBtn.textContent = '■ Stop';
       recBtn.classList.add('warn');
@@ -206,7 +219,7 @@ async function showCapture() {
     } else {
       recBtn.disabled = true;
       const blob = await recorder.stop();
-      ring.stop();
+      guide.stop();
       showProcessing(blob);
     }
   });

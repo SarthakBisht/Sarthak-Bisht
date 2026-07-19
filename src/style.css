@@ -135,6 +135,20 @@ button.warn { background: transparent; border-color: var(--warn); color: var(--w
 }
 .banner.info { border-color: var(--accent-2); color: var(--accent); background: rgba(79,209,197,0.06); }
 
+/* Live capture coaching banner */
+.coach {
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.coach.good { border-color: var(--accent); color: var(--accent); background: rgba(79,209,197,0.08); }
+.coach.warn { border-color: var(--warn); color: var(--warn); background: rgba(255,209,102,0.08); }
+
 /* Config param panel */
 .panel-toggle { font-size: 13px; }
 .params { display: grid; grid-template-columns: 1fr; gap: 14px; max-height: 46vh; overflow: auto; }
