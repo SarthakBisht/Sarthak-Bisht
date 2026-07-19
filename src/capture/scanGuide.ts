@@ -1,3 +1,5 @@
+import { drawCoverageSphere } from './coverageSphere';
+
 /**
  * Live capture HUD drawn over the camera preview. It coaches the user in real
  * time so the resulting clip actually reconstructs well:
@@ -29,7 +31,6 @@ export class ScanGuide {
   private sctx: OffscreenCanvasRenderingContext2D;
   private video: HTMLVideoElement;
   private raf = 0;
-  private startTime = 0;
   private durationMs: number;
   private segments: number;
   private filled: boolean[];
@@ -42,6 +43,12 @@ export class ScanGuide {
   private motion = 0;
   private brightness = 128;
   private bbox = { cx: 0.5, cy: 0.5, w: 0, h: 0, found: false };
+
+  // Rotation estimate (from optical flow) → azimuth-based coverage.
+  private azimuth = 0;
+  private flowDx = 0;
+  private lastDir = 1;
+  private lastNow = 0;
 
   private readonly SW = 96;
   private readonly SH = 128;
@@ -81,8 +88,9 @@ export class ScanGuide {
   }
 
   start() {
-    this.startTime = performance.now();
     this.filled.fill(false);
+    this.azimuth = 0;
+    this.lastDir = 1;
     this.running = true;
   }
 
@@ -115,10 +123,21 @@ export class ScanGuide {
       this.analyse();
       this.lastAnalysis = now;
     }
+    const dtNow = this.lastNow ? now - this.lastNow : 16;
+    this.lastNow = now;
     if (this.running) {
-      const progress = Math.min(1, (now - this.startTime) / this.durationMs);
-      const lit = Math.floor(progress * this.segments);
-      for (let i = 0; i < lit; i++) this.filled[i] = true;
+      // Advance azimuth by actual rotation: rate scales with measured motion,
+      // direction follows optical flow. Pausing stops progress; a steady full
+      // pass fills the ring over roughly the target duration.
+      const baseRate = (Math.PI * 2) / this.durationMs;
+      const motionFactor = Math.min(1.6, this.motion / 0.02);
+      if (Math.abs(this.flowDx) > 0.4) this.lastDir = this.flowDx > 0 ? 1 : -1;
+      this.azimuth += this.lastDir * baseRate * motionFactor * dtNow;
+      const twoPi = Math.PI * 2;
+      const sec =
+        ((Math.floor((this.azimuth / twoPi) * this.segments) % this.segments) + this.segments) %
+        this.segments;
+      this.filled[sec] = true;
     }
     this.draw();
   };
@@ -144,10 +163,31 @@ export class ScanGuide {
 
     // Motion vs previous sample.
     if (this.prevLuma) {
+      const prev = this.prevLuma;
       let diff = 0;
-      for (let i = 0; i < luma.length; i++) diff += Math.abs(luma[i] - this.prevLuma[i]);
+      for (let i = 0; i < luma.length; i++) diff += Math.abs(luma[i] - prev[i]);
       const norm = diff / (luma.length * 255);
       this.motion = 0.5 * this.motion + 0.5 * norm;
+
+      // Signed horizontal shift (block match) → rotation direction & speed.
+      let bestDx = 0;
+      let bestSad = Infinity;
+      for (let dx = -8; dx <= 8; dx++) {
+        let sad = 0;
+        let cnt = 0;
+        for (let y = 6; y < h - 6; y += 3) {
+          for (let x = 10; x < w - 10; x += 3) {
+            sad += Math.abs(luma[y * w + x] - prev[y * w + x + dx]);
+            cnt++;
+          }
+        }
+        sad /= cnt || 1;
+        if (sad < bestSad) {
+          bestSad = sad;
+          bestDx = dx;
+        }
+      }
+      this.flowDx = 0.5 * this.flowDx + 0.5 * bestDx;
     }
     this.prevLuma = luma;
 
@@ -180,7 +220,7 @@ export class ScanGuide {
   }
 
   /** Decide the single most important instruction to show. */
-  private coach(remainingS: number): CoachState {
+  private coach(): CoachState {
     const cov = this.coverage();
     let primary = '';
     let ok = true;
@@ -201,9 +241,10 @@ export class ScanGuide {
       primary = '🐢 Slower — hold steady to avoid blur';
       ok = false;
     } else if (this.running && this.motion < 0.006) {
-      primary = '🔄 Keep rotating slowly';
+      primary = '🔄 Keep rotating — fill the grey sides on the sphere';
     } else if (this.running) {
-      primary = `✅ Good — keep turning ▶  ·  ${Math.max(0, Math.ceil(remainingS))}s left`;
+      if (cov > 0.92) primary = '✅ Full coverage — you can stop';
+      else primary = `✅ Keep turning ▶ — fill grey sides (${Math.round(cov * 100)}% covered)`;
     } else {
       primary = '✅ Framing looks good — press Start';
     }
@@ -240,11 +281,7 @@ export class ScanGuide {
     ctx.restore();
 
     // Scan-zone outline.
-    const now = performance.now();
-    let progress = 0;
-    if (this.running) progress = Math.min(1, (now - this.startTime) / this.durationMs);
-    const remainingS = (this.durationMs * (1 - progress)) / 1000;
-    const coach = this.coach(remainingS);
+    const coach = this.coach();
 
     ctx.lineWidth = 3;
     ctx.strokeStyle = coach.ok ? 'rgba(79,209,197,0.9)' : 'rgba(255,209,102,0.95)';
@@ -265,9 +302,9 @@ export class ScanGuide {
       ctx.stroke();
     }
 
-    // Leading marker + turn arrow.
+    // Leading marker at the current (flow-estimated) heading.
     if (this.running) {
-      const a = progress * Math.PI * 2 - Math.PI / 2;
+      const a = this.azimuth - Math.PI / 2;
       const mx = cx + Math.cos(a) * ringR;
       const my = cy + Math.sin(a) * ringR;
       ctx.beginPath();
@@ -275,6 +312,11 @@ export class ScanGuide {
       ctx.fillStyle = '#ffd166';
       ctx.fill();
     }
+
+    // Live coverage sphere in the top-right corner — grey sides still need the
+    // camera; teal sides are captured.
+    const sphR = Math.min(cw, ch) * 0.11;
+    drawCoverageSphere(ctx, cw - sphR - 14, sphR + 18, sphR, this.azimuth, this.filled, this.segments);
 
     // Detected-object box (what is being scanned) inside the zone.
     if (this.bbox.found) {
