@@ -58,16 +58,15 @@ export async function fuseFrames(
     cloud = voxelDownsample(cloud, cfg.fusion.voxelSizeM);
   }
 
-  // Statistical outlier removal.
-  if (cfg.fusion.outlier.enabled && cloud.count > cfg.fusion.outlier.k * 2) {
-    onProgress?.('fuse', 0.99, 'removing outliers');
-    await tick();
-    cloud = removeOutliers(cloud, cfg.fusion.outlier.k, cfg.fusion.outlier.stdRatio);
-  }
-
-  // Cap total points (keep highest-confidence).
+  // Cap total points BEFORE outlier removal so the (expensive) kNN pass only
+  // ever runs on <= maxPoints points.
   if (cloud.count > cfg.fusion.maxPoints) {
     cloud = capByConfidence(cloud, cfg.fusion.maxPoints);
+  }
+
+  // Statistical outlier removal (async: yields + reports progress).
+  if (cfg.fusion.outlier.enabled && cloud.count > cfg.fusion.outlier.k * 2) {
+    cloud = await removeOutliers(cloud, cfg.fusion.outlier.k, cfg.fusion.outlier.stdRatio, onProgress);
   }
 
   return cloud;
@@ -115,12 +114,21 @@ export function voxelDownsample(cloud: PointCloud, voxel: number): PointCloud {
  * Statistical outlier removal using a uniform spatial grid for kNN lookup.
  * Drops depth-edge flyers whose mean neighbour distance is an outlier.
  */
-export function removeOutliers(cloud: PointCloud, k: number, stdRatio: number): PointCloud {
+export async function removeOutliers(
+  cloud: PointCloud,
+  k: number,
+  stdRatio: number,
+  onProgress?: ProgressFn,
+): Promise<PointCloud> {
   const { count } = cloud;
   const grid = buildGrid(cloud);
   const meanDist = new Float32Array(count);
   for (let i = 0; i < count; i++) {
     meanDist[i] = grid.meanKnnDistance(i, k);
+    if ((i & 8191) === 8191) {
+      onProgress?.('fuse', 0.99, `removing outliers ${Math.round((i / count) * 100)}%`);
+      await tick(); // yield so the UI repaints during the kNN pass
+    }
   }
   let mean = 0;
   for (let i = 0; i < count; i++) mean += meanDist[i];

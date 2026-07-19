@@ -104,7 +104,8 @@ async function autoTuneForDevice(): Promise<void> {
       bilateral: { diameter: Math.min(c.depth.bilateral.diameter, 5) },
     },
     fusion: {
-      maxPoints: Math.min(c.fusion.maxPoints, 300_000),
+      maxPoints: Math.min(c.fusion.maxPoints, 150_000),
+      outlier: { k: Math.min(c.fusion.outlier.k, 8) },
     },
   });
 }
