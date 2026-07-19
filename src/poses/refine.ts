@@ -1,5 +1,6 @@
 import type { Keyframe, ProgressFn } from '../types';
 import { getConfig } from '../config';
+import { tick } from '../util/tick';
 
 /**
  * Refine the ideal constant-angular-step turntable poses using feature
@@ -13,10 +14,10 @@ import { getConfig } from '../config';
  * that gap's angular size. Returns per-frame angles in radians spanning the
  * configured total sweep.
  */
-export function refineTurntableAngles(
+export async function refineTurntableAngles(
   keyframes: Keyframe[],
   onProgress?: ProgressFn,
-): number[] {
+): Promise<number[]> {
   const cfg = getConfig();
   const n = keyframes.length;
   const sweep = (cfg.capture.totalSweepDeg * Math.PI) / 180;
@@ -30,6 +31,7 @@ export function refineTurntableAngles(
   for (let i = 0; i < n - 1; i++) {
     gaps[i] = medianHorizontalMotion(keyframes[i], keyframes[i + 1], cfg.poses.maxFeatures);
     onProgress?.('poses', (i + 1) / (n - 1), `gap ${i + 1}/${n - 1}`);
+    await tick(); // yield between gaps so the UI stays responsive
   }
 
   // Smooth a couple of iterations to suppress tracking noise, keep positivity.

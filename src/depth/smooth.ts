@@ -1,5 +1,6 @@
-import type { DepthMap } from '../types';
+import type { DepthMap, ProgressFn } from '../types';
 import { getConfig } from '../config';
+import { tick } from '../util/tick';
 
 /**
  * Depth denoising. High-frequency surface texture (wood grain, mineral speckle)
@@ -13,23 +14,31 @@ import { getConfig } from '../config';
  *     only a small angle apart, so this is an approximate but effective flicker
  *     killer (kept at a low weight by default).
  */
-export function smoothDepthMaps(maps: DepthMap[]): DepthMap[] {
+export async function smoothDepthMaps(
+  maps: DepthMap[],
+  onProgress?: ProgressFn,
+): Promise<DepthMap[]> {
   const cfg = getConfig();
   let work = maps;
 
   if (cfg.depth.bilateral.enabled) {
-    work = work.map((m) =>
-      bilateral(
-        m,
+    const out: DepthMap[] = new Array(maps.length);
+    for (let i = 0; i < work.length; i++) {
+      out[i] = bilateral(
+        work[i],
         cfg.depth.bilateral.diameter,
         cfg.depth.bilateral.sigmaSpace,
         cfg.depth.bilateral.sigmaDepth,
-      ),
-    );
+      );
+      onProgress?.('smooth', (i + 1) / work.length, `frame ${i + 1}/${work.length}`);
+      await tick(); // yield so the UI repaints between frames
+    }
+    work = out;
   }
 
   if (cfg.depth.temporalWeight > 0 && work.length >= 3) {
     work = temporalMedianBlend(work, cfg.depth.temporalWeight);
+    await tick();
   }
   return work;
 }

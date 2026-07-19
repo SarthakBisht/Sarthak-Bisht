@@ -229,9 +229,10 @@ async function showCapture() {
 // Processing screen with progress bar.
 // ---------------------------------------------------------------------------
 const STAGE_WEIGHTS: Record<string, [number, number]> = {
-  keyframes: [0.0, 0.12],
-  matte: [0.12, 0.4],
-  depth: [0.4, 0.72],
+  keyframes: [0.0, 0.1],
+  matte: [0.1, 0.36],
+  depth: [0.36, 0.64],
+  smooth: [0.64, 0.72],
   poses: [0.72, 0.8],
   fuse: [0.8, 0.97],
   done: [0.97, 1.0],
@@ -457,6 +458,7 @@ function prettyStage(s: string): string {
       keyframes: 'Extracting keyframes',
       matte: 'Matting frames',
       depth: 'Estimating depth',
+      smooth: 'Smoothing depth',
       poses: 'Refining poses',
       fuse: 'Fusing point cloud',
       done: 'Finalizing',

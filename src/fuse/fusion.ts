@@ -8,6 +8,7 @@ import type {
 } from '../types';
 import { getConfig } from '../config';
 import { backprojectFrame, type FramePoints } from './backproject';
+import { tick } from '../util/tick';
 
 /**
  * Fuse all back-projected frames into a single coloured point cloud. Multi-view
@@ -34,6 +35,7 @@ export async function fuseFrames(
     frames.push(fp);
     total += fp.count;
     onProgress?.('fuse', (i + 1) / keyframes.length, `frame ${i + 1}/${keyframes.length}`);
+    await tick(); // yield between frames
   }
 
   // Concatenate.
@@ -51,11 +53,15 @@ export async function fuseFrames(
 
   // Voxel downsample / dedup.
   if (cfg.fusion.voxelSizeM > 0) {
+    onProgress?.('fuse', 0.985, 'merging points');
+    await tick();
     cloud = voxelDownsample(cloud, cfg.fusion.voxelSizeM);
   }
 
   // Statistical outlier removal.
   if (cfg.fusion.outlier.enabled && cloud.count > cfg.fusion.outlier.k * 2) {
+    onProgress?.('fuse', 0.99, 'removing outliers');
+    await tick();
     cloud = removeOutliers(cloud, cfg.fusion.outlier.k, cfg.fusion.outlier.stdRatio);
   }
 
