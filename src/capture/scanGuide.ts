@@ -49,6 +49,7 @@ export class ScanGuide {
   private flowDx = 0;
   private lastDir = 1;
   private lastNow = 0;
+  private baseCy = -1; // object vertical centroid at record start (tilt reference)
 
   private readonly SW = 96;
   private readonly SH = 128;
@@ -91,6 +92,7 @@ export class ScanGuide {
     this.filled.fill(false);
     this.azimuth = 0;
     this.lastDir = 1;
+    this.baseCy = -1;
     this.running = true;
   }
 
@@ -126,6 +128,7 @@ export class ScanGuide {
     const dtNow = this.lastNow ? now - this.lastNow : 16;
     this.lastNow = now;
     if (this.running) {
+      if (this.baseCy < 0 && this.bbox.found) this.baseCy = this.bbox.cy;
       // Advance azimuth by actual rotation: rate scales with measured motion,
       // direction follows optical flow. Pausing stops progress; a steady full
       // pass fills the ring over roughly the target duration.
@@ -236,6 +239,14 @@ export class ScanGuide {
       ok = false;
     } else if (Math.hypot(this.bbox.cx - 0.5, this.bbox.cy - 0.5) > 0.16) {
       primary = `🎯 Center the object ${this.arrow()}`;
+      ok = false;
+    } else if (
+      this.running &&
+      this.baseCy >= 0 &&
+      this.bbox.found &&
+      Math.abs(this.bbox.cy - this.baseCy) > 0.14
+    ) {
+      primary = '📏 Keep the phone level — don’t tilt up/down';
       ok = false;
     } else if (this.running && this.motion > 0.055) {
       primary = '🐢 Slower — hold steady to avoid blur';

@@ -185,7 +185,7 @@ async function showCapture() {
   const hint = el(
     'div',
     { class: 'muted' },
-    'Center the object in the circle. Turn the turntable slowly and evenly through a full 360°; recording auto-stops at the max duration.',
+    'Center the object in the circle and turn slowly through a full 360°. Keep the phone at ONE height — tilting up/down to see the top distorts the scan (turntable mode captures a middle band). Recording auto-stops at the max duration.',
   );
   screen.append(hint);
   root.append(screen);

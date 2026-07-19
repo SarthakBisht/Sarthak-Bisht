@@ -48,19 +48,24 @@ export async function runTier0(
   }
   await tick();
 
-  const mattes = await matteKeyframes(keyframes, onProgress);
+  const rawMattes = await matteKeyframes(keyframes, onProgress);
   await tick();
 
-  const rawDepths = await estimateDepth(keyframes, onProgress);
+  // Drop frames where the phone was tilted (object drifts vertically) — the
+  // fixed-elevation turntable model can't place them and they corrupt the cloud.
+  const { keyframes: frames, mattes, dropped } = rejectTiltedFrames(keyframes, rawMattes);
+  if (dropped > 0) onProgress?.('matte', 1, `dropped ${dropped} tilted frame(s)`);
+
+  const rawDepths = await estimateDepth(frames, onProgress);
   await tick();
   const depths = await smoothDepthMaps(rawDepths, onProgress);
 
   onProgress?.('poses', 0, 'refining turntable poses');
-  const thetas = await refineTurntableAngles(keyframes, onProgress);
-  const poses = deriveTurntablePoses(keyframes, { thetasRad: thetas });
+  const thetas = await refineTurntableAngles(frames, onProgress);
+  const poses = deriveTurntablePoses(frames, { thetasRad: thetas });
   await tick();
 
-  let cloud = await fuseFrames(keyframes, depths, mattes, poses, onProgress);
+  let cloud = await fuseFrames(frames, depths, mattes, poses, onProgress);
 
   // Metric scale (turntable diameter by default; UI can recalibrate later).
   let metersPerUnit = 1;
@@ -78,7 +83,52 @@ export async function runTier0(
   }
 
   onProgress?.('done', 1, `${cloud.count.toLocaleString()} points`);
-  return { keyframes, mattes, depths, poses, cloud, metersPerUnit };
+  return { keyframes: frames, mattes, depths, poses, cloud, metersPerUnit };
+}
+
+/**
+ * Reject frames where the phone tilted (the object's vertical centroid drifts
+ * from the median) or that lost the object — the fixed-elevation turntable model
+ * can only handle a single camera height. Conservative: if it would drop too
+ * many frames, keep them all (avoids nuking a valid scan on a noisy estimate).
+ */
+function rejectTiltedFrames(
+  keyframes: Keyframe[],
+  mattes: Matte[],
+): { keyframes: Keyframe[]; mattes: Matte[]; dropped: number } {
+  const cfg = getConfig();
+  const thr = cfg.poses.maxVerticalDriftFrac;
+  const n = keyframes.length;
+  if (thr >= 1 || n < 5) return { keyframes, mattes, dropped: 0 };
+
+  const info = mattes.map((m) => {
+    let sum = 0;
+    let count = 0;
+    for (let y = 0; y < m.height; y++) {
+      let rc = 0;
+      for (let x = 0; x < m.width; x++) if (m.alpha[y * m.width + x] === 255) rc++;
+      sum += y * rc;
+      count += rc;
+    }
+    return { cy: count ? sum / count : m.height / 2, area: count };
+  });
+
+  const h = keyframes[0].height;
+  const medCy = [...info.map((i) => i.cy)].sort((a, b) => a - b)[n >> 1];
+  const medArea = [...info.map((i) => i.area)].sort((a, b) => a - b)[n >> 1] || 1;
+
+  const keep: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const okArea = info[i].area > medArea * 0.25;
+    const okDrift = Math.abs(info[i].cy - medCy) <= thr * h;
+    if (okArea && okDrift) keep.push(i);
+  }
+  if (keep.length < Math.max(3, Math.floor(n * 0.5))) {
+    return { keyframes, mattes, dropped: 0 }; // too aggressive → keep all
+  }
+  const kf = keep.map((idx, newI) => ({ ...keyframes[idx], index: newI }));
+  const km = keep.map((idx) => mattes[idx]);
+  return { keyframes: kf, mattes: km, dropped: n - keep.length };
 }
 
 /**

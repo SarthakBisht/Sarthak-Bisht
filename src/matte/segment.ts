@@ -81,9 +81,18 @@ export async function matteKeyframes(
     const maskTensor = tensor[0].mul(255).to('uint8') as Parameters<typeof RawImage.fromTensor>[0];
     const maskImg = await RawImage.fromTensor(maskTensor).resize(kf.width, kf.height);
 
-    const alpha = thresholdAlpha(maskImg, kf.width, kf.height, cfg.matte.threshold);
-    const eroded = erode(alpha, kf.width, kf.height, cfg.matte.erosionPx);
-    out.push({ width: kf.width, height: kf.height, alpha: eroded });
+    let alpha = thresholdAlpha(maskImg, kf.width, kf.height, cfg.matte.threshold);
+    // Restrict to the centered scan-zone ellipse so off-center background and the
+    // turntable surface never enter the geometry.
+    if (cfg.matte.roi.enabled) {
+      alpha = applyRoi(alpha, kf.width, kf.height, cfg.matte.roi.radiusXFrac, cfg.matte.roi.radiusYFrac);
+    }
+    // Keep only the biggest blob (drops stray background regions RMBG let through).
+    if (cfg.matte.largestComponentOnly) {
+      alpha = largestComponent(alpha, kf.width, kf.height);
+    }
+    alpha = erode(alpha, kf.width, kf.height, cfg.matte.erosionPx);
+    out.push({ width: kf.width, height: kf.height, alpha });
     onProgress?.('matte', (i + 1) / keyframes.length, `frame ${i + 1}/${keyframes.length}`);
   }
   return out;
@@ -129,6 +138,68 @@ export function erode(mask: Uint8Array, w: number, h: number, px: number): Uint8
     src = dst;
   }
   return src;
+}
+
+/** Zero out mask pixels outside a centered ellipse (the scan zone). */
+export function applyRoi(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  rxFrac: number,
+  ryFrac: number,
+): Uint8Array {
+  const cx = w / 2;
+  const cy = h / 2;
+  const rx = w * rxFrac;
+  const ry = h * ryFrac;
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const dy = (y - cy) / ry;
+    for (let x = 0; x < w; x++) {
+      const dx = (x - cx) / rx;
+      out[y * w + x] = dx * dx + dy * dy <= 1 ? mask[y * w + x] : 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * Keep only the largest 4-connected foreground component. Iterative flood fill
+ * with a typed-array stack (safe for large masks).
+ */
+export function largestComponent(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const n = w * h;
+  const label = new Int32Array(n).fill(-1);
+  const stack = new Int32Array(n);
+  let bestLabel = -1;
+  let bestSize = 0;
+  let cur = 0;
+  const sizes: number[] = [];
+
+  for (let start = 0; start < n; start++) {
+    if (mask[start] !== 255 || label[start] !== -1) continue;
+    let sp = 0;
+    stack[sp++] = start;
+    label[start] = cur;
+    let size = 0;
+    while (sp > 0) {
+      const p = stack[--sp];
+      size++;
+      const x = p % w;
+      const y = (p / w) | 0;
+      if (x > 0 && mask[p - 1] === 255 && label[p - 1] === -1) { label[p - 1] = cur; stack[sp++] = p - 1; }
+      if (x < w - 1 && mask[p + 1] === 255 && label[p + 1] === -1) { label[p + 1] = cur; stack[sp++] = p + 1; }
+      if (y > 0 && mask[p - w] === 255 && label[p - w] === -1) { label[p - w] = cur; stack[sp++] = p - w; }
+      if (y < h - 1 && mask[p + w] === 255 && label[p + w] === -1) { label[p + w] = cur; stack[sp++] = p + w; }
+    }
+    sizes[cur] = size;
+    if (size > bestSize) { bestSize = size; bestLabel = cur; }
+    cur++;
+  }
+  if (bestLabel < 0) return mask;
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = label[i] === bestLabel ? 255 : 0;
+  return out;
 }
 
 export function disposeSegmenter(): void {

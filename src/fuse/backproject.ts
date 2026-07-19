@@ -62,6 +62,9 @@ export function backprojectFrame(
       if (n >= cap) break;
 
       const d01 = depth.depth[idx];
+      // Drop far points — the background / turntable surface sits near the far
+      // plane and single-view depth places it there.
+      if (d01 > cfg.fusion.farCull01) continue;
       const d = near + d01 * (far - near);
 
       // Camera-space (image +Y down matches our world basis).

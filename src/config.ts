@@ -57,6 +57,18 @@ export interface ScannerConfig {
     erosionPx: number;
     /** Model id (transformers.js `background-removal` task). */
     modelId: string;
+    /**
+     * Restrict the matte to a centered ellipse (the capture scan zone) so
+     * off-center background / the turntable surface never enters the geometry.
+     */
+    roi: {
+      enabled: boolean;
+      radiusXFrac: number; // half-width as fraction of image width
+      radiusYFrac: number; // half-height as fraction of image height
+      featherPx: number; // soft edge
+    };
+    /** Keep only the largest connected foreground blob (drops stray regions). */
+    largestComponentOnly: boolean;
   };
 
   // ---- Depth --------------------------------------------------------------
@@ -114,6 +126,11 @@ export interface ScannerConfig {
      * disagreement get lower confidence and feed Tier-1 densification.
      */
     edgeConfidenceFalloffPx: number;
+    /**
+     * Drop back-projected points whose normalized depth (0=near,1=far) exceeds
+     * this — the background / turntable surface sits near the far plane. 1 = off.
+     */
+    farCull01: number;
   };
 
   // ---- Pose refinement ----------------------------------------------------
@@ -124,6 +141,12 @@ export interface ScannerConfig {
     maxFeatures: number;
     /** Refinement iterations (angular-step + axis correction). */
     iterations: number;
+    /**
+     * Reject frames whose object vertical centroid drifts more than this
+     * fraction of image height from the median — i.e. the phone was tilted,
+     * which the fixed-elevation turntable model can't handle. 1 = keep all.
+     */
+    maxVerticalDriftFrac: number;
   };
 
   // ---- Tier 1: Gaussian Splatting ----------------------------------------
@@ -212,6 +235,8 @@ export const BASE_CONFIG: ScannerConfig = {
     threshold: 0.5,
     erosionPx: 3,
     modelId: 'briaai/RMBG-1.4',
+    roi: { enabled: true, radiusXFrac: 0.42, radiusYFrac: 0.46, featherPx: 12 },
+    largestComponentOnly: true,
   },
   depth: {
     modelId: 'onnx-community/depth-anything-v2-small',
@@ -229,8 +254,9 @@ export const BASE_CONFIG: ScannerConfig = {
     voxelSizeM: 0.0015,
     outlier: { enabled: true, k: 12, stdRatio: 2.0 },
     edgeConfidenceFalloffPx: 6,
+    farCull01: 0.85,
   },
-  poses: { refine: true, maxFeatures: 400, iterations: 3 },
+  poses: { refine: true, maxFeatures: 400, iterations: 3, maxVerticalDriftFrac: 0.12 },
   splat: {
     enabled: true,
     maxGaussians: 250_000,
