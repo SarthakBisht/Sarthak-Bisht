@@ -1,0 +1,29 @@
+{
+  "name": "driftwood-3d-scanner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fully client-side PWA that reconstructs driftwood / aquascaping rock from a turntable video into an orbitable 3D asset (point cloud / Gaussian splat) for three.js. WebGPU-first, no backend, no telemetry.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "three": "^0.185.0"
+  },
+  "optionalDependencies": {
+    "onnxruntime-web": "^1.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/three": "^0.185.1",
+    "@webgpu/types": "^0.1.60",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vite-plugin-pwa": "^1.3.0"
+  }
+}
