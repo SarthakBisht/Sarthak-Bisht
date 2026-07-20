@@ -221,6 +221,81 @@ function smooth3(src: Float32Array, nx: number, ny: number, nz: number): Float32
   return out;
 }
 
+/**
+ * Surface Nets over an arbitrary scalar `field` (nx*ny*nz). Returns geometry
+ * plus, per vertex, the source cell index so callers can colour afterwards.
+ * Shared by the point-cloud mesher and the visual-hull carver.
+ */
+export function meshFromField(
+  field: Float32Array,
+  nx: number,
+  ny: number,
+  nz: number,
+  minX: number,
+  minY: number,
+  minZ: number,
+  cell: number,
+  iso = 0.5,
+): { positions: Float32Array; indices: Uint32Array; normals: Float32Array; vertexCells: Int32Array } {
+  const idx = (x: number, y: number, z: number) => (z * ny + y) * nx + x;
+  const cellVert = new Int32Array((nx - 1) * (ny - 1) * (nz - 1)).fill(-1);
+  const cIdx = (x: number, y: number, z: number) => (z * (ny - 1) + y) * (nx - 1) + x;
+  const cornerOff = [
+    [0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0],
+    [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1],
+  ];
+  const verts: number[] = [];
+  const vcells: number[] = [];
+
+  for (let z = 0; z < nz - 1; z++) {
+    for (let y = 0; y < ny - 1; y++) {
+      for (let x = 0; x < nx - 1; x++) {
+        let mask = 0;
+        const vals: number[] = [];
+        for (let ci = 0; ci < 8; ci++) {
+          const [ox, oy, oz] = cornerOff[ci];
+          const v = field[idx(x + ox, y + oy, z + oz)] - iso;
+          vals.push(v);
+          if (v > 0) mask |= 1 << ci;
+        }
+        if (mask === 0 || mask === 255) continue;
+        let px = 0, py = 0, pz = 0, cnt = 0;
+        for (const [a, b] of EDGES) {
+          if ((vals[a] > 0) === (vals[b] > 0)) continue;
+          const t = vals[a] / (vals[a] - vals[b]);
+          const [ax, ay, az] = cornerOff[a];
+          const [bx, by, bz] = cornerOff[b];
+          px += ax + (bx - ax) * t;
+          py += ay + (by - ay) * t;
+          pz += az + (bz - az) * t;
+          cnt++;
+        }
+        px = x + px / cnt; py = y + py / cnt; pz = z + pz / cnt;
+        cellVert[cIdx(x, y, z)] = verts.length / 3;
+        verts.push(minX + px * cell, minY + py * cell, minZ + pz * cell);
+        vcells.push(idx(x, y, z));
+      }
+    }
+  }
+
+  const tris: number[] = [];
+  for (let z = 1; z < nz - 1; z++) {
+    for (let y = 1; y < ny - 1; y++) {
+      for (let x = 1; x < nx - 1; x++) {
+        const v0 = field[idx(x, y, z)] - iso;
+        emitQuad(field, idx, cellVert, cIdx, tris, v0, iso, x, y, z, 0);
+        emitQuad(field, idx, cellVert, cIdx, tris, v0, iso, x, y, z, 1);
+        emitQuad(field, idx, cellVert, cIdx, tris, v0, iso, x, y, z, 2);
+      }
+    }
+  }
+
+  const positions = new Float32Array(verts);
+  const indices = new Uint32Array(tris);
+  const normals = computeNormals(positions, indices);
+  return { positions, indices, normals, vertexCells: Int32Array.from(vcells) };
+}
+
 function computeNormals(positions: Float32Array, indices: Uint32Array): Float32Array {
   const normals = new Float32Array(positions.length);
   for (let t = 0; t < indices.length; t += 3) {

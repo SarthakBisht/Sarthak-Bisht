@@ -16,7 +16,9 @@ import { smoothDepthMaps } from '../depth/smooth';
 import { refineTurntableAngles } from '../poses/refine';
 import { deriveTurntablePoses } from '../poses/turntable';
 import { fuseFrames } from '../fuse/fusion';
-import { calibrateFromTurntable } from '../poses/scale';
+import { calibrateFromTurntable, horizontalExtent } from '../poses/scale';
+import { carveVisualHull } from '../fuse/visualHull';
+import type { TriMesh } from '../mesh/poisson';
 
 export interface Tier0Result {
   keyframes: Keyframe[];
@@ -84,6 +86,48 @@ export async function runTier0(
 
   onProgress?.('done', 1, `${cloud.count.toLocaleString()} points`);
   return { keyframes: frames, mattes, depths, poses, cloud, metersPerUnit };
+}
+
+export interface GuidedResult {
+  keyframes: Keyframe[];
+  poses: CameraPose[];
+  mesh: TriMesh;
+  cloud: PointCloud;
+  metersPerUnit: number;
+}
+
+/**
+ * Guided-capture reconstruction: controlled stills at KNOWN angles → clean
+ * silhouettes → visual hull → coloured mesh. Accurate poses (no derivation) and
+ * background-free by construction.
+ */
+export async function runGuided(
+  keyframes: Keyframe[],
+  azimuthsRad: number[],
+  onProgress?: ProgressFn,
+): Promise<GuidedResult> {
+  const cfg = getConfig();
+  if (keyframes.length < 3) {
+    throw new Error('Need at least 3 captured views for a hull.');
+  }
+
+  const mattes = await matteKeyframes(keyframes, onProgress);
+  await tick();
+
+  const poses = deriveTurntablePoses(keyframes, { thetasRad: azimuthsRad });
+  const { mesh, cloud } = await carveVisualHull(keyframes, mattes, poses, onProgress);
+
+  // Metric scale from the turntable diameter (horizontal extent → diameter).
+  let metersPerUnit = 1;
+  const extent = horizontalExtent(cloud) || 1;
+  metersPerUnit = cfg.scale.turntableDiameterM / extent;
+  for (let i = 0; i < cloud.positions.length; i++) cloud.positions[i] *= metersPerUnit;
+  for (let i = 0; i < mesh.positions.length; i++) mesh.positions[i] *= metersPerUnit;
+
+  if (cfg.runtime.aggressiveDispose) disposeSegmenter();
+
+  onProgress?.('done', 1, `${mesh.triangleCount.toLocaleString()} triangles`);
+  return { keyframes, poses, mesh, cloud, metersPerUnit };
 }
 
 /**

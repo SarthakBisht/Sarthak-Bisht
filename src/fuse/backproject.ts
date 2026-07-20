@@ -65,6 +65,9 @@ export function backprojectFrame(
       // Drop far points — the background / turntable surface sits near the far
       // plane and single-view depth places it there.
       if (d01 > cfg.fusion.farCull01) continue;
+      // Drop low-confidence edge flyers (near the silhouette boundary).
+      const conf = Math.min(1, dist[idx] / falloff);
+      if (conf < cfg.fusion.minConfidence) continue;
       const d = near + d01 * (far - near);
 
       // Camera-space (image +Y down matches our world basis).
@@ -87,7 +90,7 @@ export function backprojectFrame(
       colors[p3 + 1] = kf.rgba[c + 1] / 255;
       colors[p3 + 2] = kf.rgba[c + 2] / 255;
 
-      confidence[n] = Math.min(1, dist[idx] / falloff);
+      confidence[n] = conf;
       n++;
     }
   }

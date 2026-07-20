@@ -131,6 +131,31 @@ export interface ScannerConfig {
      * this — the background / turntable surface sits near the far plane. 1 = off.
      */
     farCull01: number;
+    /** Drop points with confidence below this (edge flyers). 0 = off. */
+    minConfidence: number;
+  };
+
+  // ---- Guided capture (discrete controlled stills) -----------------------
+  guided: {
+    /** Number of target viewpoints the user captures around the object. */
+    viewpoints: number;
+    /** How close (deg) the heading must be to a target to auto-snap. */
+    azimuthToleranceDeg: number;
+    /** Require the object to be briefly still (low motion) before snapping. */
+    requireStill: boolean;
+  };
+
+  // ---- Visual hull (silhouette space-carving) ----------------------------
+  hull: {
+    /** Voxel grid resolution per axis (desktop). */
+    gridRes: number;
+    /** Voxel grid resolution on mobile / WASM. */
+    mobileGridRes: number;
+    /** Fraction of views a voxel may fall outside the silhouette and still
+     *  count as inside (robustness to matte error). */
+    allowedMissFrac: number;
+    /** Half-extent (metres, pre-scale) of the carving cube around the object. */
+    halfExtentM: number;
   };
 
   // ---- Pose refinement ----------------------------------------------------
@@ -255,7 +280,10 @@ export const BASE_CONFIG: ScannerConfig = {
     outlier: { enabled: true, k: 12, stdRatio: 2.0 },
     edgeConfidenceFalloffPx: 6,
     farCull01: 0.85,
+    minConfidence: 0.12,
   },
+  guided: { viewpoints: 16, azimuthToleranceDeg: 8, requireStill: true },
+  hull: { gridRes: 128, mobileGridRes: 96, allowedMissFrac: 0.12, halfExtentM: 0.25 },
   poses: { refine: true, maxFeatures: 400, iterations: 3, maxVerticalDriftFrac: 0.12 },
   splat: {
     enabled: true,

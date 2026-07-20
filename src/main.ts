@@ -10,7 +10,10 @@ import {
 } from './config';
 import { createRecorder, type RecorderHandle } from './capture/recorder';
 import { ScanGuide } from './capture/scanGuide';
-import { runTier0, type Tier0Result } from './pipeline/pipeline';
+import { GuidedCapture } from './capture/guidedCapture';
+import { runTier0, runGuided, type Tier0Result, type GuidedResult } from './pipeline/pipeline';
+import type { Keyframe } from './types';
+import type { TriMesh } from './mesh/poisson';
 import { trainSplatScene } from './splat/trainer';
 import { tryPosefree } from './posefree/dust3r';
 import { reconstructMesh } from './mesh/poisson';
@@ -52,6 +55,7 @@ interface AppState {
   viewer: OrbitViewer | null;
   recorder: RecorderHandle | null;
   guide: ScanGuide | null;
+  guided: GuidedCapture | null;
 }
 const state: AppState = {
   gpuOk: false,
@@ -61,6 +65,7 @@ const state: AppState = {
   viewer: null,
   recorder: null,
   guide: null,
+  guided: null,
 };
 
 const root = document.getElementById('app')!;
@@ -85,6 +90,10 @@ function clearContent() {
   if (state.guide) {
     state.guide.dispose();
     state.guide = null;
+  }
+  if (state.guided) {
+    state.guided.dispose();
+    state.guided = null;
   }
   root.innerHTML = '';
 }
@@ -141,8 +150,23 @@ function showHome() {
     ),
   );
 
+  // Guided capture — recommended (accurate, background-free).
+  const guidedBtn = el('button', { class: 'primary grow' }, '◎ Guided scan (accurate 3D mesh)');
+  guidedBtn.addEventListener('click', () => showGuidedCapture());
+  srcCard.append(guidedBtn);
+  srcCard.append(
+    el(
+      'div',
+      { class: 'muted' },
+      'Recommended: align to each guide point and it snaps a still. Known angles + clean ' +
+        'silhouettes → a solid, background-free mesh (visual hull). Captures the overall shape; ' +
+        'very deep crevices/undercuts are smoothed.',
+    ),
+  );
+
+  srcCard.append(el('div', { class: 'param-group-title' }, 'Quick video (point cloud)'));
   const row = el('div', { class: 'row' });
-  const recordBtn = el('button', { class: 'primary grow' }, '● Record turntable');
+  const recordBtn = el('button', { class: 'grow' }, '● Record turntable');
   recordBtn.addEventListener('click', () => showCapture());
   const uploadBtn = el('button', { class: 'grow' }, '⤒ Upload video');
   const fileInput = el('input', { type: 'file', accept: 'video/*', class: 'hidden' }) as HTMLInputElement;
@@ -444,6 +468,153 @@ function addSplatExports(actions: HTMLElement, scene: SplatScene) {
   const gplyBtn = el('button', { 'data-splat-export': '1' }, 'Export gaussian .ply');
   gplyBtn.addEventListener('click', () => downloadBlob(splatToGaussianPly(scene), 'driftwood-gaussian.ply'));
   actions.append(splatBtn, gplyBtn);
+}
+
+// ---------------------------------------------------------------------------
+// Guided capture (discrete stills → visual hull).
+// ---------------------------------------------------------------------------
+async function showGuidedCapture() {
+  clearContent();
+  root.append(topbar());
+  const screen = el('div', { class: 'screen' });
+  const wrap = el('div', { class: 'capture-wrap' });
+  screen.append(wrap);
+
+  const coachBanner = el('div', { class: 'coach' }, 'Point at the object…');
+  screen.append(coachBanner);
+
+  const controls = el('div', { class: 'row' });
+  const backBtn = el('button', {}, '‹ Back');
+  backBtn.addEventListener('click', () => showHome());
+  const startBtn = el('button', { class: 'primary grow' }, '● Start guided capture');
+  controls.append(backBtn, startBtn);
+  screen.append(controls);
+  const hint = el(
+    'div',
+    { class: 'muted' },
+    'Put the object on a turntable. Press Start, then rotate to each yellow target and pause — ' +
+      'it auto-captures a sharp shot at each. Keep the object centered and the phone at one height.',
+  );
+  screen.append(hint);
+  root.append(screen);
+
+  let recorder: RecorderHandle;
+  try {
+    recorder = await createRecorder(wrap);
+  } catch (err) {
+    coachBanner.textContent = `Camera unavailable: ${(err as Error).message}`;
+    return;
+  }
+  state.recorder = recorder;
+
+  const guided = new GuidedCapture(wrap, recorder.video, {
+    onCoach: (text, ok) => {
+      coachBanner.textContent = text;
+      coachBanner.classList.toggle('good', ok);
+      coachBanner.classList.toggle('warn', !ok);
+    },
+    onComplete: (keyframes, azimuths) => showGuidedProcessing(keyframes, azimuths),
+  });
+  state.guided = guided;
+
+  startBtn.addEventListener('click', () => {
+    guided.start();
+    startBtn.disabled = true;
+    startBtn.textContent = 'Capturing…';
+  });
+}
+
+async function showGuidedProcessing(keyframes: Keyframe[], azimuths: number[]) {
+  clearContent();
+  root.append(topbar());
+  const screen = el('div', { class: 'screen' });
+  const card = el('div', { class: 'card stack' });
+  card.append(el('div', { class: 'param-group-title' }, 'Building 3D mesh (visual hull)'));
+  const bar = el('div', { class: 'progress' });
+  const fill = el('span', {});
+  bar.append(fill);
+  const label = el('div', { class: 'progress-label' }, 'Starting…');
+  card.append(bar, label);
+  card.append(
+    el('div', { class: 'muted' }, `${keyframes.length} views captured. Matting silhouettes and carving the shape…`),
+  );
+  screen.append(card);
+  root.append(screen);
+
+  const span: Record<string, [number, number]> = {
+    matte: [0.0, 0.45],
+    carve: [0.45, 0.98],
+    done: [0.98, 1.0],
+  };
+  try {
+    const result = await runGuided(keyframes, azimuths, (stage, frac, detail) => {
+      const s = span[stage] ?? [0, 1];
+      fill.style.width = `${Math.round((s[0] + (s[1] - s[0]) * frac) * 100)}%`;
+      const name = stage === 'matte' ? 'Matting silhouettes' : stage === 'carve' ? 'Carving hull' : 'Finalizing';
+      label.textContent = `${name} — ${detail ?? ''}`;
+    });
+    showGuidedResult(result);
+  } catch (err) {
+    label.textContent = '';
+    card.append(el('div', { class: 'banner' }, `Reconstruction failed: ${(err as Error).message}`));
+    const back = el('button', {}, '‹ Back');
+    back.addEventListener('click', () => showHome());
+    card.append(back);
+  }
+}
+
+async function showGuidedResult(result: GuidedResult) {
+  clearContent();
+  root.append(topbar());
+  const screen = el('div', { class: 'screen' });
+  const viewerEl = el('div', { class: 'viewer' });
+  screen.append(viewerEl);
+
+  const stats = el('div', { class: 'stat-row' });
+  stats.append(
+    el('span', {}, ...frag('Triangles: ', b(result.mesh.triangleCount.toLocaleString()))),
+    el('span', {}, ...frag('Views: ', b(String(result.keyframes.length)))),
+    el('span', {}, ...frag('Width: ', b(`${(meshWidth(result.mesh) * 100).toFixed(1)} cm`))),
+  );
+  screen.append(stats);
+
+  const actions = el('div', { class: 'row' });
+  const backBtn = el('button', {}, '‹ New scan');
+  backBtn.addEventListener('click', () => showHome());
+  const glbBtn = el('button', { class: 'primary' }, 'Export mesh .glb');
+  glbBtn.addEventListener('click', async () => {
+    glbBtn.disabled = true;
+    downloadBlob(await meshToGlb(result.mesh), 'driftwood-hull.glb');
+    glbBtn.disabled = false;
+  });
+  const plyBtn = el('button', {}, 'Export .ply');
+  plyBtn.addEventListener('click', () => downloadBlob(pointCloudToPly(result.cloud), 'driftwood-hull.ply'));
+  actions.append(backBtn, glbBtn, plyBtn);
+  screen.append(actions);
+
+  screen.append(
+    el(
+      'div',
+      { class: 'muted' },
+      'Visual-hull mesh: background-free and view-consistent. It captures the overall shape; ' +
+        'deep concavities not visible in any silhouette are smoothed over. Import the .glb into your ' +
+        'three.js aquascaping app.',
+    ),
+  );
+  root.append(screen);
+
+  state.viewer = await createViewer(viewerEl);
+  state.viewer.showMesh(result.mesh);
+}
+
+function meshWidth(mesh: TriMesh): number {
+  const p = mesh.positions;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (let i = 0; i < p.length; i += 3) {
+    minX = Math.min(minX, p[i]); maxX = Math.max(maxX, p[i]);
+    minZ = Math.min(minZ, p[i + 2]); maxZ = Math.max(maxZ, p[i + 2]);
+  }
+  return Math.max(maxX - minX, maxZ - minZ);
 }
 
 // ---------------------------------------------------------------------------
