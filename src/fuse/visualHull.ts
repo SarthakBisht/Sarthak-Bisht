@@ -92,8 +92,12 @@ export async function carveVisualHull(
   await tick();
   const geo = meshFromField(field, res, res, res, min, min, min, cell, 0.5);
 
-  // Colour each vertex from the view whose camera most directly faces it.
-  const colors = colorVertices(geo.positions, geo.normals, keyframes, poses, w2c);
+  // Colour each vertex by projecting the captured photos onto it — blending all
+  // views where the vertex is front-facing AND not occluded (visibility via the
+  // occupancy volume), with bilinear sampling. Looks like the real object.
+  onProgress?.('carve', 1, 'texturing');
+  await tick();
+  const colors = colorVertices(geo.positions, geo.normals, keyframes, poses, w2c, occ, res, min, cell);
 
   const mesh: TriMesh = {
     positions: geo.positions,
@@ -118,40 +122,93 @@ function colorVertices(
   keyframes: Keyframe[],
   poses: CameraPose[],
   w2c: Float32Array[],
+  occ: Float32Array,
+  res: number,
+  min: number,
+  cell: number,
 ): Float32Array {
   const nv = positions.length / 3;
   const colors = new Float32Array(nv * 3);
   const camPos = poses.map((p) => [p.matrix[12], p.matrix[13], p.matrix[14]] as const);
+  const N = poses.length;
+
   for (let i = 0; i < nv; i++) {
     const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
     const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
-    // Pick the view whose direction-to-camera best aligns with the normal.
-    let best = -Infinity;
-    let bestV = 0;
-    for (let v = 0; v < poses.length; v++) {
-      const dx = camPos[v][0] - px, dy = camPos[v][1] - py, dz = camPos[v][2] - pz;
+
+    let wr = 0, wg = 0, wb = 0, wsum = 0;
+    for (let v = 0; v < N; v++) {
+      // Front-facing toward this camera?
+      let dx = camPos[v][0] - px, dy = camPos[v][1] - py, dz = camPos[v][2] - pz;
       const l = Math.hypot(dx, dy, dz) || 1;
-      const dot = (dx / l) * nx + (dy / l) * ny + (dz / l) * nz;
-      if (dot > best) { best = dot; bestV = v; }
-    }
-    const m = w2c[bestV];
-    const pose = poses[bestV];
-    const cxg = m[0] * px + m[4] * py + m[8] * pz + m[12];
-    const cyg = m[1] * px + m[5] * py + m[9] * pz + m[13];
-    const czg = m[2] * px + m[6] * py + m[10] * pz + m[14];
-    let r = 0.6, g = 0.52, b = 0.42;
-    if (czg > 1e-4) {
-      const u = Math.round(pose.cx + (pose.focalPx * cxg) / czg);
-      const vv = Math.round(pose.cy + (pose.focalPx * cyg) / czg);
-      const kf = keyframes[bestV];
-      if (u >= 0 && vv >= 0 && u < kf.width && vv < kf.height) {
-        const c = (vv * kf.width + u) * 4;
-        r = kf.rgba[c] / 255; g = kf.rgba[c + 1] / 255; b = kf.rgba[c + 2] / 255;
+      dx /= l; dy /= l; dz /= l;
+      const facing = dx * nx + dy * ny + dz * nz;
+      if (facing <= 0.08) continue;
+
+      // Project into the view.
+      const m = w2c[v];
+      const czg = m[2] * px + m[6] * py + m[10] * pz + m[14];
+      if (czg <= 1e-4) continue;
+      const cxg = m[0] * px + m[4] * py + m[8] * pz + m[12];
+      const cyg = m[1] * px + m[5] * py + m[9] * pz + m[13];
+      const pose = poses[v];
+      const u = pose.cx + (pose.focalPx * cxg) / czg;
+      const vv = pose.cy + (pose.focalPx * cyg) / czg;
+      const kf = keyframes[v];
+      if (u < 0 || vv < 0 || u >= kf.width - 1 || vv >= kf.height - 1) continue;
+
+      // Occlusion: is anything between this vertex and the camera?
+      if (occludedInView(px, py, pz, camPos[v][0], camPos[v][1], camPos[v][2], occ, res, min, cell)) {
+        continue;
       }
+
+      const [r, g, b] = sampleBilinear(kf, u, vv);
+      const w = facing * facing;
+      wr += r * w; wg += g * w; wb += b * w; wsum += w;
     }
-    colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = b;
+
+    if (wsum > 0) {
+      colors[i * 3] = wr / wsum; colors[i * 3 + 1] = wg / wsum; colors[i * 3 + 2] = wb / wsum;
+    } else {
+      colors[i * 3] = 0.6; colors[i * 3 + 1] = 0.52; colors[i * 3 + 2] = 0.42;
+    }
   }
   return colors;
+}
+
+/** True if the segment from P toward camera C passes through occupied voxels. */
+function occludedInView(
+  px: number, py: number, pz: number,
+  cxw: number, cyw: number, czw: number,
+  occ: Float32Array, res: number, min: number, cell: number,
+): boolean {
+  let dx = cxw - px, dy = cyw - py, dz = czw - pz;
+  const dist = Math.hypot(dx, dy, dz) || 1;
+  dx /= dist; dy /= dist; dz /= dist;
+  // Start a couple of cells off the surface to avoid self-occlusion.
+  for (let t = cell * 2.5; t < dist; t += cell) {
+    const gx = Math.round((px + dx * t - min) / cell);
+    const gy = Math.round((py + dy * t - min) / cell);
+    const gz = Math.round((pz + dz * t - min) / cell);
+    if (gx < 0 || gy < 0 || gz < 0 || gx >= res || gy >= res || gz >= res) return false;
+    if (occ[(gz * res + gy) * res + gx] > 0.5) return true;
+  }
+  return false;
+}
+
+/** Bilinear RGB sample (0..1) of a keyframe. */
+function sampleBilinear(kf: Keyframe, u: number, v: number): [number, number, number] {
+  const w = kf.width;
+  const x0 = Math.floor(u), y0 = Math.floor(v);
+  const x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(kf.height - 1, y0 + 1);
+  const fx = u - x0, fy = v - y0;
+  const d = kf.rgba;
+  const at = (x: number, y: number, c: number) => d[(y * w + x) * 4 + c] / 255;
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const r = lerp(lerp(at(x0, y0, 0), at(x1, y0, 0), fx), lerp(at(x0, y1, 0), at(x1, y1, 0), fx), fy);
+  const g = lerp(lerp(at(x0, y0, 1), at(x1, y0, 1), fx), lerp(at(x0, y1, 1), at(x1, y1, 1), fx), fy);
+  const b = lerp(lerp(at(x0, y0, 2), at(x1, y0, 2), fx), lerp(at(x0, y1, 2), at(x1, y1, 2), fx), fy);
+  return [r, g, b];
 }
 
 /**

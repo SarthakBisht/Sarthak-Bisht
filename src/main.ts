@@ -11,6 +11,7 @@ import {
 import { createRecorder, type RecorderHandle } from './capture/recorder';
 import { ScanGuide } from './capture/scanGuide';
 import { GuidedCapture } from './capture/guidedCapture';
+import { ARGuide } from './capture/arGuide';
 import { runTier0, runGuided, type Tier0Result, type GuidedResult } from './pipeline/pipeline';
 import type { Keyframe } from './types';
 import type { TriMesh } from './mesh/poisson';
@@ -56,6 +57,7 @@ interface AppState {
   recorder: RecorderHandle | null;
   guide: ScanGuide | null;
   guided: GuidedCapture | null;
+  arGuide: ARGuide | null;
 }
 const state: AppState = {
   gpuOk: false,
@@ -66,6 +68,7 @@ const state: AppState = {
   recorder: null,
   guide: null,
   guided: null,
+  arGuide: null,
 };
 
 const root = document.getElementById('app')!;
@@ -95,6 +98,10 @@ function clearContent() {
     state.guided.dispose();
     state.guided = null;
   }
+  if (state.arGuide) {
+    state.arGuide.dispose();
+    state.arGuide = null;
+  }
   root.innerHTML = '';
 }
 
@@ -122,7 +129,7 @@ function showHome() {
   const presetCard = el('div', { class: 'card stack' });
   presetCard.append(el('div', { class: 'param-group-title' }, 'Material preset'));
   const grid = el('div', { class: 'preset-grid' });
-  const presets: MaterialPreset[] = ['driftwood-dry', 'driftwood-wet', 'rock-dry', 'rock-wet'];
+  const presets: MaterialPreset[] = ['general', 'driftwood-dry', 'driftwood-wet', 'rock-dry', 'rock-wet'];
   for (const p of presets) {
     const chip = el('div', { class: `chip${getActivePreset() === p ? ' active' : ''}` }, prettyPreset(p));
     chip.addEventListener('click', () => {
@@ -509,6 +516,16 @@ async function showGuidedCapture() {
   }
   state.recorder = recorder;
 
+  // Level/tilt guide (top-left). iOS needs a tap to grant sensor access.
+  const arGuide = new ARGuide(wrap);
+  state.arGuide = arGuide;
+  const levelBtn = el('button', {}, '⊹ Level guide');
+  levelBtn.addEventListener('click', () => {
+    arGuide.enable();
+    levelBtn.classList.add('hidden');
+  });
+  controls.append(levelBtn);
+
   const guided = new GuidedCapture(wrap, recorder.video, {
     onCoach: (text, ok) => {
       coachBanner.textContent = text;
@@ -624,7 +641,7 @@ function meshWidth(mesh: TriMesh): number {
 // Utilities.
 // ---------------------------------------------------------------------------
 function prettyPreset(p: MaterialPreset): string {
-  return { 'driftwood-dry': 'Driftwood (dry)', 'driftwood-wet': 'Driftwood (wet)', 'rock-dry': 'Rock (dry)', 'rock-wet': 'Rock (wet)' }[p];
+  return { general: 'General object', 'driftwood-dry': 'Driftwood (dry)', 'driftwood-wet': 'Driftwood (wet)', 'rock-dry': 'Rock (dry)', 'rock-wet': 'Rock (wet)' }[p];
 }
 function prettyStage(s: string): string {
   return (

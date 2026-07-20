@@ -65,7 +65,7 @@ export class GuidedCapture {
     this.sample = new OffscreenCanvas(this.SW, this.SH);
     this.sctx = this.sample.getContext('2d', { willReadFrequently: true })!;
 
-    const maxEdge = cfg.keyframes.maxEdgePx;
+    const maxEdge = cfg.guided.captureMaxEdgePx;
     const vw = video.videoWidth || 720;
     const vh = video.videoHeight || 960;
     const scale = Math.min(1, maxEdge / Math.max(vw, vh));

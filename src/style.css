@@ -105,6 +105,7 @@ button.warn { background: transparent; border-color: var(--warn); color: var(--w
 }
 .capture-preview { object-fit: cover; }
 .ring-guide { pointer-events: none; }
+.ar-guide { position: absolute; left: 10px; top: 10px; pointer-events: none; z-index: 3; }
 
 .viewer {
   position: relative;

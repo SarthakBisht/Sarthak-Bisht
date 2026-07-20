@@ -15,6 +15,7 @@
  */
 
 export type MaterialPreset =
+  | 'general'
   | 'driftwood-dry'
   | 'driftwood-wet'
   | 'rock-dry'
@@ -145,6 +146,9 @@ export interface ScannerConfig {
     requireStill: boolean;
     /** Assumed camera elevation above the object centre (deg) — level-ish phone. */
     elevationDeg: number;
+    /** Long-edge px for captured stills (sharp stills → afford higher res for
+     *  crisper silhouettes and clearer projected colour). */
+    captureMaxEdgePx: number;
   };
 
   // ---- Visual hull (silhouette space-carving) ----------------------------
@@ -288,10 +292,16 @@ export const BASE_CONFIG: ScannerConfig = {
     farCull01: 0.85,
     minConfidence: 0.12,
   },
-  guided: { viewpoints: 16, azimuthToleranceDeg: 8, requireStill: true, elevationDeg: 5 },
+  guided: {
+    viewpoints: 16,
+    azimuthToleranceDeg: 8,
+    requireStill: true,
+    elevationDeg: 5,
+    captureMaxEdgePx: 960,
+  },
   hull: {
-    gridRes: 160,
-    mobileGridRes: 128,
+    gridRes: 176,
+    mobileGridRes: 144,
     allowedMissFrac: 0.12,
     halfExtentM: 0.25,
     autoFit: true,
@@ -335,6 +345,14 @@ function clone(c: ScannerConfig): ScannerConfig {
  * described in the project brief.
  */
 export const PRESETS: Record<MaterialPreset, ScannerConfig> = {
+  // Material-agnostic default: just 3D-map any object. Neutral matte/erosion,
+  // clean-mesh path enabled. The guided/visual-hull mode is material-agnostic
+  // anyway, so this is the sensible default.
+  general: (() => {
+    const c = clone(BASE_CONFIG);
+    c.mesh.enabled = true;
+    return c;
+  })(),
   'driftwood-dry': (() => {
     const c = clone(BASE_CONFIG);
     c.mesh.enabled = true; // dry => clean mesh export allowed
@@ -369,8 +387,8 @@ export const PRESETS: Record<MaterialPreset, ScannerConfig> = {
   })(),
 };
 
-let active: ScannerConfig = clone(PRESETS['driftwood-dry']);
-let activePreset: MaterialPreset = 'driftwood-dry';
+let active: ScannerConfig = clone(PRESETS['general']);
+let activePreset: MaterialPreset = 'general';
 
 export function getConfig(): ScannerConfig {
   return active;
