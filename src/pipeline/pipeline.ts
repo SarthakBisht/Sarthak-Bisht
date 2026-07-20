@@ -114,7 +114,10 @@ export async function runGuided(
   const mattes = await matteKeyframes(keyframes, onProgress);
   await tick();
 
-  const poses = deriveTurntablePoses(keyframes, { thetasRad: azimuthsRad });
+  const poses = deriveTurntablePoses(keyframes, {
+    thetasRad: azimuthsRad,
+    elevationDeg: cfg.guided.elevationDeg,
+  });
   const { mesh, cloud } = await carveVisualHull(keyframes, mattes, poses, onProgress);
 
   // Metric scale from the turntable diameter (horizontal extent → diameter).

@@ -486,14 +486,16 @@ async function showGuidedCapture() {
   const controls = el('div', { class: 'row' });
   const backBtn = el('button', {}, '‹ Back');
   backBtn.addEventListener('click', () => showHome());
-  const startBtn = el('button', { class: 'primary grow' }, '● Start guided capture');
-  controls.append(backBtn, startBtn);
+  const startBtn = el('button', { class: 'primary grow' }, '● Start');
+  const shutterBtn = el('button', { class: 'primary grow hidden' }, '◉ Capture shot');
+  controls.append(backBtn, startBtn, shutterBtn);
   screen.append(controls);
   const hint = el(
     'div',
     { class: 'muted' },
-    'Put the object on a turntable. Press Start, then rotate to each yellow target and pause — ' +
-      'it auto-captures a sharp shot at each. Keep the object centered and the phone at one height.',
+    'Center the object on the turntable’s rotation axis, phone at one height. Press Start, then ' +
+      'rotate the turntable a step and hold still — it auto-captures each shot (or tap Capture). ' +
+      'Fill all the dots.',
   );
   screen.append(hint);
   root.append(screen);
@@ -519,9 +521,10 @@ async function showGuidedCapture() {
 
   startBtn.addEventListener('click', () => {
     guided.start();
-    startBtn.disabled = true;
-    startBtn.textContent = 'Capturing…';
+    startBtn.classList.add('hidden');
+    shutterBtn.classList.remove('hidden');
   });
+  shutterBtn.addEventListener('click', () => guided.captureNow());
 }
 
 async function showGuidedProcessing(keyframes: Keyframe[], azimuths: number[]) {

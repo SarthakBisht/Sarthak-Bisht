@@ -37,7 +37,11 @@ export async function carveVisualHull(
 
   const N = poses.length;
   const allowedMisses = Math.floor(N * cfg.hull.allowedMissFrac);
-  const half = cfg.hull.halfExtentM;
+  // Auto-fit the carving cube tightly around the object so the grid resolution
+  // is spent on the object (not empty space) → much sharper, less blobby.
+  const half = cfg.hull.autoFit
+    ? estimateHalfExtent(mattes, poses, (cfg.depth.nearMeters + cfg.depth.farMeters) / 2)
+    : cfg.hull.halfExtentM;
   const min = -half;
   const cell = (2 * half) / (res - 1);
 
@@ -80,8 +84,10 @@ export async function carveVisualHull(
     }
   }
 
-  // Light smoothing to reduce voxel staircasing, then mesh.
-  const field = smooth3(occ, res);
+  // Optional light smoothing to reduce voxel staircasing, then mesh. Fewer
+  // iterations keep more surface detail (less "blurry").
+  let field: Float32Array = occ;
+  for (let s = 0; s < cfg.hull.smoothIters; s++) field = smooth3(field, res);
   onProgress?.('carve', 1, 'meshing');
   await tick();
   const geo = meshFromField(field, res, res, res, min, min, min, cell, 0.5);
@@ -146,6 +152,33 @@ function colorVertices(
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = b;
   }
   return colors;
+}
+
+/**
+ * Estimate the object's world half-extent from the silhouettes so the carving
+ * cube fits tightly. For each view, the farthest silhouette pixel from the
+ * principal point maps (at camera distance D) to a world half-extent; take the
+ * max across views and add a small margin.
+ */
+function estimateHalfExtent(mattes: Matte[], poses: CameraPose[], D: number): number {
+  let maxHalf = 0;
+  for (let v = 0; v < mattes.length; v++) {
+    const m = mattes[v];
+    const pose = poses[v];
+    let maxPx = 0;
+    for (let y = 0; y < m.height; y++) {
+      for (let x = 0; x < m.width; x++) {
+        if (m.alpha[y * m.width + x] !== 255) continue;
+        const dx = Math.abs(x - pose.cx);
+        const dy = Math.abs(y - pose.cy);
+        const d = Math.max(dx, dy);
+        if (d > maxPx) maxPx = d;
+      }
+    }
+    const worldHalf = (maxPx / pose.focalPx) * D;
+    if (worldHalf > maxHalf) maxHalf = worldHalf;
+  }
+  return maxHalf > 1e-3 ? maxHalf * 1.15 : 0.25;
 }
 
 /** 3x3x3 box smoothing over a cubic field. */

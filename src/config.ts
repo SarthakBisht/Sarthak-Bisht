@@ -143,6 +143,8 @@ export interface ScannerConfig {
     azimuthToleranceDeg: number;
     /** Require the object to be briefly still (low motion) before snapping. */
     requireStill: boolean;
+    /** Assumed camera elevation above the object centre (deg) — level-ish phone. */
+    elevationDeg: number;
   };
 
   // ---- Visual hull (silhouette space-carving) ----------------------------
@@ -154,8 +156,12 @@ export interface ScannerConfig {
     /** Fraction of views a voxel may fall outside the silhouette and still
      *  count as inside (robustness to matte error). */
     allowedMissFrac: number;
-    /** Half-extent (metres, pre-scale) of the carving cube around the object. */
+    /** Fallback half-extent (metres) if object size can't be estimated. */
     halfExtentM: number;
+    /** Auto-fit the carving cube to the object's silhouette size. */
+    autoFit: boolean;
+    /** Number of 3x3x3 smoothing passes on the occupancy (0 = crisp/blocky). */
+    smoothIters: number;
   };
 
   // ---- Pose refinement ----------------------------------------------------
@@ -282,8 +288,15 @@ export const BASE_CONFIG: ScannerConfig = {
     farCull01: 0.85,
     minConfidence: 0.12,
   },
-  guided: { viewpoints: 16, azimuthToleranceDeg: 8, requireStill: true },
-  hull: { gridRes: 128, mobileGridRes: 96, allowedMissFrac: 0.12, halfExtentM: 0.25 },
+  guided: { viewpoints: 16, azimuthToleranceDeg: 8, requireStill: true, elevationDeg: 5 },
+  hull: {
+    gridRes: 160,
+    mobileGridRes: 128,
+    allowedMissFrac: 0.12,
+    halfExtentM: 0.25,
+    autoFit: true,
+    smoothIters: 1,
+  },
   poses: { refine: true, maxFeatures: 400, iterations: 3, maxVerticalDriftFrac: 0.12 },
   splat: {
     enabled: true,
